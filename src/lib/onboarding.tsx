@@ -14,9 +14,12 @@ import {
 import { usePromise } from "@raycast/utils";
 import {
   authStatus,
-  installTgdl,
+  INSTALL_STEPS,
+  type InstallStepId,
   loginFinish,
   loginStart,
+  runInstall,
+  type StepStatus,
   TgdlNotInstalled,
   TGDL_PACKAGE,
 } from "./tgdl";
@@ -59,68 +62,104 @@ export function TgdlGate({ children }: { children: ReactNode }) {
 const INSTALL_INTRO = [
   "# Welcome to Telegram Downloader",
   "",
-  "This extension is powered by the **`tgdl`** command-line tool, which talks to",
-  "Telegram directly — nothing is sent to any third-party server.",
+  "Download photos, videos, and files from any Telegram chat — right from Raycast,",
+  "running quietly in the background.",
   "",
-  "It isn't installed yet. Press **⏎** to install it now (uses Homebrew + pipx).",
+  "First, let's get you set up. It takes about a minute and only happens once.",
   "",
-  "_You'll only need to do this once._",
+  "Press **⏎** to begin.",
 ].join("\n");
 
-function InstallView({ onDone }: { onDone: () => void }) {
-  const [log, setLog] = useState("");
-  const [installing, setInstalling] = useState(false);
+const STEP_HYPE: Record<InstallStepId, string> = {
+  check: "Taking a look around…",
+  pipx: "Gathering the essentials…",
+  tgdl: "Almost there — installing tgdl…",
+  verify: "Putting on the finishing touches…",
+};
 
-  async function install() {
-    setInstalling(true);
+const STATUS_ICON: Record<StepStatus, string> = {
+  pending: "⬜️",
+  active: "⏳",
+  done: "✅",
+  skipped: "✅",
+  error: "❌",
+};
+
+type Phase = "intro" | "running" | "error";
+
+function stepper(statuses: Record<InstallStepId, StepStatus>): string {
+  const active = INSTALL_STEPS.find((s) => statuses[s.id] === "active");
+  const hype = active ? STEP_HYPE[active.id] : "All set! 🎉";
+  const rows = INSTALL_STEPS.map((s) => {
+    const icon = STATUS_ICON[statuses[s.id]];
+    const label = statuses[s.id] === "active" ? `**${s.label}**` : s.label;
+    return `${icon}&nbsp;&nbsp;${label}`;
+  }).join("  \n");
+  return `# Setting things up\n\n_${hype}_\n\n&nbsp;\n\n${rows}`;
+}
+
+function InstallView({ onDone }: { onDone: () => void }) {
+  const initial = Object.fromEntries(
+    INSTALL_STEPS.map((s) => [s.id, "pending"]),
+  ) as Record<InstallStepId, StepStatus>;
+
+  const [phase, setPhase] = useState<Phase>("intro");
+  const [statuses, setStatuses] = useState(initial);
+  const [errorMsg, setErrorMsg] = useState("");
+  const [log, setLog] = useState("");
+
+  async function start() {
+    setPhase("running");
+    setStatuses(initial);
     setLog("");
     try {
-      await installTgdl((c) => setLog((prev) => prev + c));
-      await showToast({ style: Toast.Style.Success, title: "tgdl installed" });
+      await runInstall(
+        (id, status) => setStatuses((prev) => ({ ...prev, [id]: status })),
+        (chunk) => setLog((prev) => prev + chunk),
+      );
+      await showToast({ style: Toast.Style.Success, title: "You're all set" });
       onDone();
     } catch (e) {
-      setLog(
-        (prev) => prev + `\n${e instanceof Error ? e.message : String(e)}`,
-      );
+      setErrorMsg(e instanceof Error ? e.message : String(e));
+      setPhase("error");
       await showToast({
         style: Toast.Style.Failure,
-        title: "Install failed",
-        message: "See the log",
+        title: "Setup didn't finish",
       });
-    } finally {
-      setInstalling(false);
     }
   }
 
-  const markdown =
-    installing || log
-      ? `# Installing tgdl…\n\n\`\`\`\n${log || "Starting…"}\n\`\`\``
-      : INSTALL_INTRO;
+  let markdown: string;
+  if (phase === "intro") markdown = INSTALL_INTRO;
+  else if (phase === "error")
+    markdown = `# Setup didn't finish\n\n${errorMsg}\n\n${stepper(statuses)}`;
+  else markdown = stepper(statuses);
 
   return (
     <Detail
-      isLoading={installing}
+      isLoading={phase === "running"}
       markdown={markdown}
       actions={
         <ActionPanel>
-          {!installing && (
-            <Action
-              title="Install Tgdl"
-              icon={Icon.Download}
-              onAction={install}
-            />
+          {phase === "intro" && (
+            <Action title="Get Started" icon={Icon.Download} onAction={start} />
           )}
-          {!installing && (
+          {phase === "error" && (
             <Action
-              title="I Installed It — Recheck"
+              title="Try Again"
               icon={Icon.ArrowClockwise}
-              onAction={onDone}
+              onAction={start}
             />
           )}
-          <Action.CopyToClipboard
-            title="Copy Manual Install Command"
-            content={`pipx install ${TGDL_PACKAGE}`}
-          />
+          {phase === "error" && log.trim() !== "" && (
+            <Action.CopyToClipboard title="Copy Logs" content={log} />
+          )}
+          {phase === "error" && (
+            <Action.CopyToClipboard
+              title="Copy Manual Install Command"
+              content={`pipx install ${TGDL_PACKAGE}`}
+            />
+          )}
         </ActionPanel>
       }
     />
