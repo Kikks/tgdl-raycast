@@ -1,0 +1,147 @@
+{
+  "$schema": "https://www.raycast.com/schemas/extension.json",
+  "name": "telegram-downloader",
+  "title": "Telegram Downloader",
+  "description": "Download photos, videos, and files from any Telegram channel or chat — runs in the background, tracked from your menu bar.",
+  "icon": "extension-icon.png",
+  "author": "kikks",
+  "categories": [
+    "Media",
+    "Productivity"
+  ],
+  "platforms": [
+    "macOS"
+  ],
+  "license": "MIT",
+  "commands": [
+    {
+      "name": "new-download",
+      "title": "New Download",
+      "subtitle": "Telegram Downloader",
+      "description": "Configure and start a background download from a Telegram channel or chat.",
+      "mode": "view"
+    },
+    {
+      "name": "download-monitor",
+      "title": "Download Monitor",
+      "subtitle": "Telegram Downloader",
+      "description": "Track active and recent downloads from the menu bar, with live progress and speed.",
+      "mode": "menu-bar",
+      "interval": "1m"
+    },
+    {
+      "name": "quick-download",
+      "title": "Quick Download",
+      "subtitle": "Telegram Downloader",
+      "description": "Start a download instantly from a channel link or @username, using your default settings.",
+      "mode": "no-view",
+      "arguments": [
+        {
+          "name": "target",
+          "type": "text",
+          "placeholder": "@channel, t.me link, or numeric ID",
+          "required": false
+        }
+      ]
+    },
+    {
+      "name": "run-profile",
+      "title": "Run Profile",
+      "subtitle": "Telegram Downloader",
+      "description": "Browse your saved tgdl profiles and launch one as a background download.",
+      "mode": "view"
+    },
+    {
+      "name": "download-history",
+      "title": "Download History",
+      "subtitle": "Telegram Downloader",
+      "description": "Review per-channel download stats, bandwidth, and recent sessions.",
+      "mode": "view"
+    },
+    {
+      "name": "manage-jobs",
+      "title": "Manage Jobs",
+      "subtitle": "Telegram Downloader",
+      "description": "List running and finished jobs — cancel, retry, open the output folder, or clear them.",
+      "mode": "view"
+    }
+  ],
+  "preferences": [
+    {
+      "name": "tgdlPath",
+      "type": "textfield",
+      "required": false,
+      "title": "tgdl Executable",
+      "description": "Path to the tgdl binary. Leave as 'tgdl' if it is on your PATH, or run `which tgdl` / `pipx list` to find the full path.",
+      "default": "tgdl"
+    },
+    {
+      "name": "defaultDownloadFolder",
+      "type": "directory",
+      "required": false,
+      "title": "Default Download Folder",
+      "description": "Where new downloads are saved unless overridden. Defaults to tgdl's own default (~/tgdl_downloads)."
+    },
+    {
+      "name": "defaultConcurrency",
+      "type": "dropdown",
+      "required": false,
+      "title": "Default Concurrency",
+      "description": "How many files to download at once by default.",
+      "default": "3",
+      "data": [
+        {
+          "title": "1",
+          "value": "1"
+        },
+        {
+          "title": "2",
+          "value": "2"
+        },
+        {
+          "title": "3",
+          "value": "3"
+        },
+        {
+          "title": "5",
+          "value": "5"
+        },
+        {
+          "title": "8",
+          "value": "8"
+        },
+        {
+          "title": "10",
+          "value": "10"
+        }
+      ]
+    }
+  ],
+  "dependencies": {
+    "@raycast/api": "^1.103.0",
+    "@raycast/utils": "^2.2.1"
+  },
+  "devDependencies": {
+    "@commitlint/cli": "^21.0.2",
+    "@commitlint/config-conventional": "^21.0.2",
+    "@raycast/eslint-config": "^2.0.4",
+    "@types/node": "22.19.17",
+    "@types/react": "19.0.10",
+    "eslint": "^9.22.0",
+    "husky": "^9.1.7",
+    "lint-staged": "^17.0.7",
+    "prettier": "^3.5.3",
+    "typescript": "^5.8.2"
+  },
+  "scripts": {
+    "dev": "ray develop",
+    "build": "ray build",
+    "lint": "ray lint",
+    "fix-lint": "ray lint --fix",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
+    "publish": "npx @raycast/api@latest publish",
+    "prepublishOnly": "echo \"\\n\\nIt seems like you are trying to publish the Raycast extension to npm.\\n\\nIf you did intend to publish it to npm, remove the \\`prepublishOnly\\` script and rerun \\`npm publish\\` again.\\nIf you wanted to publish it to the Raycast Store instead, use \\`npm run publish\\` instead.\\n\\n\" && exit 1",
+    "prepare": "husky"
+  }
+}
