@@ -120,3 +120,26 @@ export interface StartJobResponse {
   job_id: string;
   pid: number;
 }
+
+export interface TgUser {
+  id: number;
+  first_name: string;
+  username: string | null;
+}
+
+export interface LoginStartResult {
+  ok?: boolean;
+  phone_code_hash?: string;
+  already_authorized?: boolean;
+  user?: TgUser;
+  error?: string;
+  detail?: string;
+}
+
+export interface LoginFinishResult {
+  ok?: boolean;
+  needs_password?: boolean;
+  user?: TgUser;
+  error?: string;
+  detail?: string;
+}
