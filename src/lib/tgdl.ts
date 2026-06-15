@@ -2,11 +2,10 @@
 // through here, so binary resolution, JSON parsing, and error mapping live in
 // one place. See docs/json-api.md in the CLI repo for the contracts.
 
-import { execFile } from "child_process";
+import { spawn } from "child_process";
 import { mkdtempSync, writeFileSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
-import { promisify } from "util";
 import { getPreferenceValues } from "@raycast/api";
 import type {
   AuthStatus,
@@ -14,10 +13,19 @@ import type {
   DownloadConfig,
   HistoryResponse,
   JobStatus,
+  LoginFinishResult,
+  LoginStartResult,
   StartJobResponse,
 } from "./types";
 
-const execFileAsync = promisify(execFile);
+// Source for in-app install. Switch to "tgdl" once published to PyPI.
+export const TGDL_PACKAGE = "git+https://github.com/Kikks/tgdl.git";
+
+// Raycast runs with a slim environment; make sure pipx/Homebrew shims resolve.
+function tgdlEnv(): NodeJS.ProcessEnv {
+  const extra = `/opt/homebrew/bin:/usr/local/bin:${process.env.HOME}/.local/bin`;
+  return { ...process.env, PATH: `${extra}:${process.env.PATH ?? ""}` };
+}
 
 // `Preferences` is the global type generated from package.json (raycast-env.d.ts).
 export function preferences(): Preferences {
@@ -44,31 +52,41 @@ export class TgdlNotAuthenticated extends TgdlError {
 
 // ── core runner ───────────────────────────────────────────────────────────────
 
-async function run(args: string[]): Promise<string> {
+function exec(
+  args: string[],
+  input?: string,
+): Promise<{ stdout: string; stderr: string; code: number }> {
   const bin = preferences().tgdlPath || "tgdl";
+  return new Promise((resolve, reject) => {
+    const child = spawn(bin, args, { env: tgdlEnv() });
+    let stdout = "";
+    let stderr = "";
+    child.on("error", reject); // e.g. ENOENT when the binary is missing
+    child.stdout.on("data", (d) => (stdout += d.toString()));
+    child.stderr.on("data", (d) => (stderr += d.toString()));
+    child.on("close", (code) => resolve({ stdout, stderr, code: code ?? 0 }));
+    if (input != null) child.stdin.write(input);
+    child.stdin.end();
+  });
+}
+
+async function run(args: string[], input?: string): Promise<string> {
+  let res: { stdout: string; stderr: string; code: number };
   try {
-    // PATH is augmented so pipx/Homebrew shims resolve under Raycast's slim env.
-    const env = {
-      ...process.env,
-      PATH: `${process.env.PATH ?? ""}:/opt/homebrew/bin:/usr/local/bin:${process.env.HOME}/.local/bin`,
-    };
-    const { stdout } = await execFileAsync(bin, args, {
-      env,
-      maxBuffer: 16 * 1024 * 1024,
-    });
-    return stdout;
+    res = await exec(args, input);
   } catch (err) {
-    const e = err as NodeJS.ErrnoException & {
-      stdout?: string;
-      stderr?: string;
-    };
-    if (e.code === "ENOENT") throw new TgdlNotInstalled(bin);
-    // tgdl emits a JSON error object on stdout even on non-zero exit.
-    const payload = parseMaybe<{ error?: string }>(e.stdout);
-    if (payload?.error === "not_authenticated")
-      throw new TgdlNotAuthenticated();
-    throw new TgdlError(payload?.error ?? e.stderr?.trim() ?? e.message);
+    if ((err as NodeJS.ErrnoException).code === "ENOENT") {
+      throw new TgdlNotInstalled(preferences().tgdlPath || "tgdl");
+    }
+    throw new TgdlError((err as Error).message);
   }
+  if (res.code === 0) return res.stdout;
+  // Non-zero exit: tgdl emits a JSON error object on stdout.
+  const payload = parseMaybe<{ error?: string }>(res.stdout);
+  if (payload?.error === "not_authenticated") throw new TgdlNotAuthenticated();
+  throw new TgdlError(
+    payload?.error ?? res.stderr.trim() ?? `tgdl exited with code ${res.code}`,
+  );
 }
 
 async function runJson<T>(args: string[]): Promise<T> {
@@ -139,6 +157,89 @@ export async function startJob(
   if (!parsed) throw new TgdlError(`Unexpected output: ${out.slice(0, 200)}`);
   if (parsed.error === "not_authenticated") throw new TgdlNotAuthenticated();
   if (parsed.error) throw new TgdlError(parsed.error);
+  return parsed;
+}
+
+// ── onboarding: install + login ───────────────────────────────────────────────
+
+/**
+ * Install the tgdl CLI via pipx (bootstrapping pipx through Homebrew if needed).
+ * Streams combined stdout/stderr through `onData`. Resolves on success.
+ */
+export function installTgdl(onData: (chunk: string) => void): Promise<void> {
+  const script = [
+    "set -e",
+    'if command -v pipx >/dev/null 2>&1; then PIPX="$(command -v pipx)";',
+    'elif command -v brew >/dev/null 2>&1; then echo "Installing pipx via Homebrew (this can take a minute)…"; brew install pipx; PIPX="$(command -v pipx || echo /opt/homebrew/bin/pipx)";',
+    'else echo "ERROR: need pipx or Homebrew. See https://pipx.pypa.io" >&2; exit 1; fi',
+    `echo "Installing tgdl…"; "$PIPX" install --force "${TGDL_PACKAGE}"`,
+    'echo "✓ Done. You can now sign in."',
+  ].join("\n");
+
+  return new Promise((resolve, reject) => {
+    const child = spawn("/bin/bash", ["-c", script], {
+      env: { ...tgdlEnv(), NONINTERACTIVE: "1", HOMEBREW_NO_AUTO_UPDATE: "1" },
+    });
+    child.stdout.on("data", (d) => onData(d.toString()));
+    child.stderr.on("data", (d) => onData(d.toString()));
+    child.on("error", reject);
+    child.on("close", (code) =>
+      code === 0
+        ? resolve()
+        : reject(new Error(`Install exited with code ${code}`)),
+    );
+  });
+}
+
+/** Headless login step 1 — request a verification code. */
+export async function loginStart(
+  apiId: string,
+  apiHash: string,
+  phone: string,
+): Promise<LoginStartResult> {
+  const out = await run([
+    "auth",
+    "login-start",
+    "--api-id",
+    apiId.trim(),
+    "--api-hash",
+    apiHash.trim(),
+    "--phone",
+    phone.trim(),
+  ]);
+  return parseOrThrow<LoginStartResult>(out);
+}
+
+/** Headless login step 2 — sign in with the code (and 2FA password via stdin). */
+export async function loginFinish(
+  phone: string,
+  code: string,
+  phoneCodeHash: string,
+  password?: string,
+): Promise<LoginFinishResult> {
+  const args = [
+    "auth",
+    "login-finish",
+    "--phone",
+    phone.trim(),
+    "--code",
+    code.trim(),
+    "--phone-code-hash",
+    phoneCodeHash,
+  ];
+  if (password) args.push("--password-stdin");
+  const out = await run(args, password ? password : undefined);
+  return parseOrThrow<LoginFinishResult>(out);
+}
+
+export async function logout(): Promise<{ ok: boolean }> {
+  return parseOrThrow(await run(["auth", "logout"]));
+}
+
+function parseOrThrow<T>(out: string): T {
+  const parsed = parseMaybe<T>(out);
+  if (parsed == null)
+    throw new TgdlError(`Unexpected output: ${out.slice(0, 200)}`);
   return parsed;
 }
 
