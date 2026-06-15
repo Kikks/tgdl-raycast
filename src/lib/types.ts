@@ -45,6 +45,7 @@ export interface JobStatus {
 
 export interface AuthStatus {
   authenticated: boolean;
+  version?: string; // present on tgdl >= 0.3.0
   user?: { id: number; first_name: string; username: string | null };
 }
 

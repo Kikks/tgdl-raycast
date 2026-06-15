@@ -22,6 +22,28 @@ import type {
 // Source for in-app install. Switch to "tgdl" once published to PyPI.
 export const TGDL_PACKAGE = "git+https://github.com/Kikks/tgdl.git";
 
+// The minimum tgdl version this build of the extension needs. Bump this in
+// lockstep with the CLI whenever a command relies on a newer CLI feature, so a
+// stale local binary is caught and the user is prompted to update.
+export const MIN_TGDL_VERSION = "0.3.0";
+
+/** True if `version` (e.g. "0.3.1") is >= `min`. Missing/garbage → false. */
+export function versionAtLeast(
+  version: string | undefined,
+  min: string,
+): boolean {
+  if (!version) return false;
+  const parse = (v: string) => v.split(".").map((n) => parseInt(n, 10) || 0);
+  const a = parse(version);
+  const b = parse(min);
+  for (let i = 0; i < Math.max(a.length, b.length); i++) {
+    const x = a[i] ?? 0;
+    const y = b[i] ?? 0;
+    if (x !== y) return x > y;
+  }
+  return true;
+}
+
 // Raycast runs with a slim environment; make sure pipx/Homebrew shims resolve.
 function tgdlEnv(): NodeJS.ProcessEnv {
   const extra = `/opt/homebrew/bin:/usr/local/bin:${process.env.HOME}/.local/bin`;

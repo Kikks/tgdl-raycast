@@ -18,41 +18,45 @@ import {
   type InstallStepId,
   loginFinish,
   loginStart,
+  MIN_TGDL_VERSION,
   runInstall,
   type StepStatus,
   TgdlNotInstalled,
   TGDL_PACKAGE,
+  versionAtLeast,
 } from "./tgdl";
 
 export type TgdlState =
   | "loading"
   | "not_installed"
+  | "outdated"
   | "not_authed"
   | "ready"
   | "error";
 
 export function useTgdlStatus() {
-  const { data, isLoading, error, revalidate } = usePromise(async () => {
-    const s = await authStatus();
-    return s.authenticated;
-  });
+  const { data, isLoading, error, revalidate } = usePromise(authStatus);
 
   let state: TgdlState = "loading";
   if (!isLoading) {
     if (error instanceof TgdlNotInstalled) state = "not_installed";
     else if (error) state = "error";
-    else state = data ? "ready" : "not_authed";
+    else if (!versionAtLeast(data?.version, MIN_TGDL_VERSION))
+      state = "outdated";
+    else state = data?.authenticated ? "ready" : "not_authed";
   }
-  return { state, isLoading, error, revalidate };
+  return { state, isLoading, error, revalidate, version: data?.version };
 }
 
 /** Wrap a command's UI; renders onboarding until tgdl is installed + signed in. */
 export function TgdlGate({ children }: { children: ReactNode }) {
-  const { state, error, revalidate } = useTgdlStatus();
+  const { state, error, revalidate, version } = useTgdlStatus();
 
   if (state === "loading")
     return <Detail isLoading markdown="Checking tgdl…" />;
   if (state === "not_installed") return <InstallView onDone={revalidate} />;
+  if (state === "outdated")
+    return <InstallView onDone={revalidate} mode="update" version={version} />;
   if (state === "error")
     return <ErrorView message={error?.message} onRetry={revalidate} />;
   if (state === "not_authed") return <LoginView onDone={revalidate} />;
@@ -69,6 +73,16 @@ const INSTALL_INTRO = [
   "",
   "Press **⏎** to begin.",
 ].join("\n");
+
+const updateIntro = (version?: string) =>
+  [
+    "# Update available",
+    "",
+    `Your installed \`tgdl\` (${version ?? "unknown"}) is older than this extension needs`,
+    `(**${MIN_TGDL_VERSION}+**). Some features won't work until you update.`,
+    "",
+    "Press **⏎** to update now — it only takes a moment.",
+  ].join("\n");
 
 const STEP_HYPE: Record<InstallStepId, string> = {
   check: "Taking a look around…",
@@ -87,7 +101,10 @@ const STATUS_ICON: Record<StepStatus, string> = {
 
 type Phase = "intro" | "running" | "error";
 
-function stepper(statuses: Record<InstallStepId, StepStatus>): string {
+function stepper(
+  statuses: Record<InstallStepId, StepStatus>,
+  title: string,
+): string {
   const active = INSTALL_STEPS.find((s) => statuses[s.id] === "active");
   const hype = active ? STEP_HYPE[active.id] : "All set! 🎉";
   const rows = INSTALL_STEPS.map((s) => {
@@ -95,10 +112,19 @@ function stepper(statuses: Record<InstallStepId, StepStatus>): string {
     const label = statuses[s.id] === "active" ? `**${s.label}**` : s.label;
     return `${icon}&nbsp;&nbsp;${label}`;
   }).join("  \n");
-  return `# Setting things up\n\n_${hype}_\n\n&nbsp;\n\n${rows}`;
+  return `# ${title}\n\n_${hype}_\n\n&nbsp;\n\n${rows}`;
 }
 
-function InstallView({ onDone }: { onDone: () => void }) {
+function InstallView({
+  onDone,
+  mode = "install",
+  version,
+}: {
+  onDone: () => void;
+  mode?: "install" | "update";
+  version?: string;
+}) {
+  const isUpdate = mode === "update";
   const initial = Object.fromEntries(
     INSTALL_STEPS.map((s) => [s.id, "pending"]),
   ) as Record<InstallStepId, StepStatus>;
@@ -117,23 +143,28 @@ function InstallView({ onDone }: { onDone: () => void }) {
         (id, status) => setStatuses((prev) => ({ ...prev, [id]: status })),
         (chunk) => setLog((prev) => prev + chunk),
       );
-      await showToast({ style: Toast.Style.Success, title: "You're all set" });
+      await showToast({
+        style: Toast.Style.Success,
+        title: isUpdate ? "tgdl updated" : "You're all set",
+      });
       onDone();
     } catch (e) {
       setErrorMsg(e instanceof Error ? e.message : String(e));
       setPhase("error");
       await showToast({
         style: Toast.Style.Failure,
-        title: "Setup didn't finish",
+        title: isUpdate ? "Update didn't finish" : "Setup didn't finish",
       });
     }
   }
 
+  const runTitle = isUpdate ? "Updating tgdl" : "Setting things up";
   let markdown: string;
-  if (phase === "intro") markdown = INSTALL_INTRO;
+  if (phase === "intro")
+    markdown = isUpdate ? updateIntro(version) : INSTALL_INTRO;
   else if (phase === "error")
-    markdown = `# Setup didn't finish\n\n${errorMsg}\n\n${stepper(statuses)}`;
-  else markdown = stepper(statuses);
+    markdown = `# ${isUpdate ? "Update" : "Setup"} didn't finish\n\n${errorMsg}\n\n${stepper(statuses, runTitle)}`;
+  else markdown = stepper(statuses, runTitle);
 
   return (
     <Detail
@@ -142,7 +173,11 @@ function InstallView({ onDone }: { onDone: () => void }) {
       actions={
         <ActionPanel>
           {phase === "intro" && (
-            <Action title="Get Started" icon={Icon.Download} onAction={start} />
+            <Action
+              title={isUpdate ? "Update Now" : "Get Started"}
+              icon={Icon.Download}
+              onAction={start}
+            />
           )}
           {phase === "error" && (
             <Action
