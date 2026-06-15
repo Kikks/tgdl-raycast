@@ -176,15 +176,25 @@ function ErrorSection({ error }: { error: Error }) {
   const message =
     error instanceof TgdlError ? error.message : "Something went wrong.";
   return (
-    <MenuBarExtra.Section title="tgdl unavailable">
+    <MenuBarExtra.Section title="Setup needed">
       <MenuBarExtra.Item
         icon={{ source: Icon.Warning, tintColor: Color.Red }}
         title={message}
         tooltip={message}
       />
+      <MenuBarExtra.Item
+        title="Set Up Telegram Downloader…"
+        icon={Icon.Gear}
+        onAction={() =>
+          launchCommand({
+            name: "new-download",
+            type: LaunchType.UserInitiated,
+          }).catch(() => undefined)
+        }
+      />
       {notInstalled && (
         <MenuBarExtra.Item
-          title="Copy install command"
+          title="Copy Install Command"
           icon={Icon.Clipboard}
           onAction={() => Clipboard.copy("pipx install tgdl")}
         />

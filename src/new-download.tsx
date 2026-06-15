@@ -2,8 +2,6 @@ import { useState } from "react";
 import {
   Action,
   ActionPanel,
-  Clipboard,
-  Detail,
   Form,
   Icon,
   LaunchType,
@@ -13,13 +11,8 @@ import {
   showToast,
 } from "@raycast/api";
 import { usePromise } from "@raycast/utils";
-import {
-  authStatus,
-  listDialogs,
-  preferences,
-  startJob,
-  TgdlError,
-} from "./lib/tgdl";
+import { listDialogs, preferences, startJob, TgdlError } from "./lib/tgdl";
+import { TgdlGate } from "./lib/onboarding";
 import {
   ALL_MEDIA_TYPES,
   CONCURRENCY_OPTIONS,
@@ -48,51 +41,21 @@ interface FormValues {
 }
 
 export default function Command() {
-  const prefs = preferences();
-  const { data: auth, isLoading: authLoading } = usePromise(authStatus);
-  const authed = auth?.authenticated === true;
+  return (
+    <TgdlGate>
+      <NewDownloadForm />
+    </TgdlGate>
+  );
+}
 
-  // Recent chats, only fetched once we know we're authenticated.
-  const { data: dialogs } = usePromise(listDialogs, [40], { execute: authed });
+function NewDownloadForm() {
+  const prefs = preferences();
+  // tgdl is installed + authenticated here (guaranteed by TgdlGate).
+  const { data: dialogs } = usePromise(listDialogs, [40]);
 
   const [channel, setChannel] = useState("");
   const [dateRange, setDateRange] = useState("all");
   const [template, setTemplate] = useState(TEMPLATE_PRESETS[0].value);
-
-  if (authLoading) {
-    return <Detail isLoading markdown="Checking tgdl authentication…" />;
-  }
-
-  if (!authed) {
-    return (
-      <Detail
-        markdown={[
-          "# Not signed in to Telegram",
-          "",
-          "This extension needs the `tgdl` CLI installed and authenticated.",
-          "",
-          "1. Install it: `pipx install tgdl`",
-          "2. In a terminal, run `tgdl init` and follow the prompts (API ID/hash + login).",
-          "",
-          "Then reopen this command.",
-        ].join("\n")}
-        actions={
-          <ActionPanel>
-            <Action
-              title="Copy Install Command"
-              icon={Icon.Clipboard}
-              onAction={() => Clipboard.copy("pipx install tgdl")}
-            />
-            <Action
-              title="Copy Login Command"
-              icon={Icon.Clipboard}
-              onAction={() => Clipboard.copy("tgdl init")}
-            />
-          </ActionPanel>
-        }
-      />
-    );
-  }
 
   async function submit(values: FormValues, dryRun: boolean) {
     if (!channel.trim()) {
