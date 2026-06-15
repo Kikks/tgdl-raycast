@@ -160,35 +160,91 @@ export async function startJob(
   return parsed;
 }
 
-// ── onboarding: install + login ───────────────────────────────────────────────
+// ── onboarding: install ────────────────────────────────────────────────────────
 
-/**
- * Install the tgdl CLI via pipx (bootstrapping pipx through Homebrew if needed).
- * Streams combined stdout/stderr through `onData`. Resolves on success.
- */
-export function installTgdl(onData: (chunk: string) => void): Promise<void> {
-  const script = [
-    "set -e",
-    'if command -v pipx >/dev/null 2>&1; then PIPX="$(command -v pipx)";',
-    'elif command -v brew >/dev/null 2>&1; then echo "Installing pipx via Homebrew (this can take a minute)…"; brew install pipx; PIPX="$(command -v pipx || echo /opt/homebrew/bin/pipx)";',
-    'else echo "ERROR: need pipx or Homebrew. See https://pipx.pypa.io" >&2; exit 1; fi',
-    `echo "Installing tgdl…"; "$PIPX" install --force "${TGDL_PACKAGE}"`,
-    'echo "✓ Done. You can now sign in."',
-  ].join("\n");
+export type InstallStepId = "check" | "pipx" | "tgdl" | "verify";
+export type StepStatus = "pending" | "active" | "done" | "skipped" | "error";
 
-  return new Promise((resolve, reject) => {
+export const INSTALL_STEPS: { id: InstallStepId; label: string }[] = [
+  { id: "check", label: "Checking your system" },
+  { id: "pipx", label: "Setting up the installer" },
+  { id: "tgdl", label: "Installing tgdl" },
+  { id: "verify", label: "Finishing up" },
+];
+
+function bash(
+  script: string,
+): Promise<{ stdout: string; stderr: string; code: number }> {
+  return new Promise((resolve) => {
     const child = spawn("/bin/bash", ["-c", script], {
       env: { ...tgdlEnv(), NONINTERACTIVE: "1", HOMEBREW_NO_AUTO_UPDATE: "1" },
     });
-    child.stdout.on("data", (d) => onData(d.toString()));
-    child.stderr.on("data", (d) => onData(d.toString()));
-    child.on("error", reject);
-    child.on("close", (code) =>
-      code === 0
-        ? resolve()
-        : reject(new Error(`Install exited with code ${code}`)),
+    let stdout = "";
+    let stderr = "";
+    child.stdout.on("data", (d) => (stdout += d.toString()));
+    child.stderr.on("data", (d) => (stderr += d.toString()));
+    child.on("error", (e) =>
+      resolve({ stdout, stderr: `${stderr}${e}`, code: 1 }),
     );
+    child.on("close", (code) => resolve({ stdout, stderr, code: code ?? 0 }));
   });
+}
+
+/**
+ * Install tgdl as a sequence of discrete steps so the UI can show a clean
+ * stepper instead of raw brew/pipx output. Reports each step's status through
+ * `onStep`; combined output (for debugging) goes to `onLog`. Throws a
+ * TgdlError on failure.
+ */
+export async function runInstall(
+  onStep: (id: InstallStepId, status: StepStatus) => void,
+  onLog?: (chunk: string) => void,
+): Promise<void> {
+  const log = (s: string) => {
+    if (s) onLog?.(s);
+  };
+
+  onStep("check", "active");
+  const hasPipx = (await bash("command -v pipx")).code === 0;
+  const hasBrew = (await bash("command -v brew")).code === 0;
+  onStep("check", "done");
+
+  if (hasPipx) {
+    onStep("pipx", "skipped");
+  } else if (hasBrew) {
+    onStep("pipx", "active");
+    const r = await bash("brew install pipx");
+    log(r.stdout + r.stderr);
+    if (r.code !== 0) {
+      onStep("pipx", "error");
+      throw new TgdlError("Couldn't set up the installer (pipx) via Homebrew.");
+    }
+    onStep("pipx", "done");
+  } else {
+    onStep("pipx", "error");
+    throw new TgdlError(
+      "Need Homebrew or pipx. See https://pipx.pypa.io to install pipx.",
+    );
+  }
+
+  onStep("tgdl", "active");
+  const install = await bash(`pipx install --force "${TGDL_PACKAGE}"`);
+  log(install.stdout + install.stderr);
+  if (install.code !== 0) {
+    onStep("tgdl", "error");
+    throw new TgdlError(install.stderr.trim() || "Installing tgdl failed.");
+  }
+  onStep("tgdl", "done");
+
+  onStep("verify", "active");
+  const verify = await bash("command -v tgdl");
+  if (verify.code !== 0) {
+    onStep("verify", "error");
+    throw new TgdlError(
+      "tgdl installed but isn't on PATH. Set its full path in preferences.",
+    );
+  }
+  onStep("verify", "done");
 }
 
 /** Headless login step 1 — request a verification code. */
