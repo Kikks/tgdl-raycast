@@ -15,6 +15,7 @@ import type {
   JobStatus,
   LoginFinishResult,
   LoginStartResult,
+  ProfileSummary,
   StartJobResponse,
 } from "./types";
 
@@ -139,6 +140,10 @@ export function cleanJobs(): Promise<{ removed: number }> {
 
 export function history(): Promise<HistoryResponse> {
   return runJson<HistoryResponse>(["status"]);
+}
+
+export function listProfiles(): Promise<ProfileSummary[]> {
+  return runJson<ProfileSummary[]>(["profile", "list"]);
 }
 
 /** Start a detached download from a full config (written to a temp file). */

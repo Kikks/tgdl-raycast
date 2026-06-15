@@ -121,6 +121,13 @@ export interface StartJobResponse {
   pid: number;
 }
 
+export interface ProfileSummary {
+  name: string;
+  channel: string;
+  media_types: MediaType[];
+  output_path: string;
+}
+
 export interface TgUser {
   id: number;
   first_name: string;
