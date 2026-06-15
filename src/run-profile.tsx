@@ -102,6 +102,17 @@ function ProfileItem({ profile }: { profile: ProfileSummary }) {
             icon={Icon.Eye}
             onAction={() => run(true)}
           />
+          <Action
+            title="Edit in New Download"
+            icon={Icon.Pencil}
+            onAction={() =>
+              launchCommand({
+                name: "new-download",
+                type: LaunchType.UserInitiated,
+                context: { profileName: profile.name },
+              }).catch(() => undefined)
+            }
+          />
           <Action.Push
             title="Show Config"
             icon={Icon.Sidebar}
