@@ -35,7 +35,7 @@ export default function Command() {
   if (error) {
     return (
       <MenuBarExtra
-        icon={{ source: Icon.Download, tintColor: Color.Red }}
+        icon={{ source: Icon.Download, tintColor: Color.PrimaryText }}
         tooltip="Telegram Downloader"
       >
         <ErrorSection error={error} />
