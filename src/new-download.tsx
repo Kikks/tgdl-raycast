@@ -1,9 +1,10 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import {
   Action,
   ActionPanel,
   Form,
   Icon,
+  LaunchProps,
   LaunchType,
   Toast,
   launchCommand,
@@ -11,8 +12,17 @@ import {
   showToast,
 } from "@raycast/api";
 import { usePromise } from "@raycast/utils";
-import { listDialogs, preferences, startJob, TgdlError } from "./lib/tgdl";
+import {
+  listDialogs,
+  listProfiles,
+  preferences,
+  profileSave,
+  profileShow,
+  startJob,
+  TgdlError,
+} from "./lib/tgdl";
 import { TgdlGate } from "./lib/onboarding";
+import { formatBytes } from "./lib/format";
 import {
   ALL_MEDIA_TYPES,
   CONCURRENCY_OPTIONS,
@@ -24,6 +34,7 @@ import {
 import type { DownloadConfig } from "./lib/types";
 
 interface FormValues {
+  channel: string;
   mediaTypes: string[];
   days: string;
   dateFrom: Date | null;
@@ -38,39 +49,100 @@ interface FormValues {
   sidecars: boolean;
   resume: string;
   concurrency: string;
+  profileName: string;
 }
 
-export default function Command() {
+export default function Command(
+  props: LaunchProps<{ launchContext: { profileName?: string } }>,
+) {
   return (
     <TgdlGate>
-      <NewDownloadForm />
+      <NewDownloadHost initialProfile={props.launchContext?.profileName} />
     </TgdlGate>
   );
 }
 
-function NewDownloadForm() {
+function NewDownloadHost({ initialProfile }: { initialProfile?: string }) {
+  const { data: profiles } = usePromise(listProfiles);
+  const [initial, setInitial] = useState<DownloadConfig | undefined>(undefined);
+  const [formKey, setFormKey] = useState(0);
+
+  async function loadProfile(name: string) {
+    const toast = await showToast({
+      style: Toast.Style.Animated,
+      title: `Loading “${name}”…`,
+    });
+    try {
+      const cfg = await profileShow(name);
+      setInitial(cfg);
+      setFormKey((k) => k + 1); // remount the form with the profile's values
+      toast.style = Toast.Style.Success;
+      toast.title = `Loaded “${name}”`;
+    } catch (e) {
+      toast.style = Toast.Style.Failure;
+      toast.title = "Couldn't load profile";
+      toast.message = e instanceof TgdlError ? e.message : String(e);
+    }
+  }
+
+  // Preload when opened from Run Profile's "Edit & Run".
+  useEffect(() => {
+    if (initialProfile) loadProfile(initialProfile);
+  }, [initialProfile]);
+
+  return (
+    <DownloadForm
+      key={formKey}
+      initial={initial}
+      profiles={(profiles ?? []).map((p) => p.name)}
+      onLoadProfile={loadProfile}
+    />
+  );
+}
+
+function DownloadForm({
+  initial,
+  profiles,
+  onLoadProfile,
+}: {
+  initial?: DownloadConfig;
+  profiles: string[];
+  onLoadProfile: (name: string) => void;
+}) {
   const prefs = preferences();
-  // tgdl is installed + authenticated here (guaranteed by TgdlGate).
   const { data: dialogs } = usePromise(listDialogs, [40]);
 
-  const [channel, setChannel] = useState("");
-  const [dateRange, setDateRange] = useState("all");
-  const [template, setTemplate] = useState(TEMPLATE_PRESETS[0].value);
+  const [channel, setChannel] = useState(initial?.channel ?? "");
+  const [dateRange, setDateRange] = useState<string>(
+    initial?.date_range_type ?? "all",
+  );
+  const [template, setTemplate] = useState(
+    initial?.filename_template ?? TEMPLATE_PRESETS[0].value,
+  );
 
-  async function submit(values: FormValues, dryRun: boolean) {
+  const subDefaults = [
+    initial?.subfolders_by_type && "type",
+    initial?.subfolders_by_date && "date",
+    initial?.subfolders_by_sender && "sender",
+  ].filter(Boolean) as string[];
+
+  const outputDefault = initial?.output_path
+    ? [initial.output_path]
+    : prefs.defaultDownloadFolder
+      ? [prefs.defaultDownloadFolder]
+      : [];
+
+  function buildConfig(values: FormValues): DownloadConfig | null {
     if (!channel.trim()) {
-      await showToast({
-        style: Toast.Style.Failure,
-        title: "Channel is required",
-      });
-      return;
+      showToast({ style: Toast.Style.Failure, title: "Channel is required" });
+      return null;
     }
     if (values.mediaTypes.length === 0) {
-      await showToast({
+      showToast({
         style: Toast.Style.Failure,
         title: "Pick at least one media type",
       });
-      return;
+      return null;
     }
 
     const config: DownloadConfig = {
@@ -86,14 +158,12 @@ function NewDownloadForm() {
       subfolders_by_date: values.subfolders.includes("date"),
       subfolders_by_sender: values.subfolders.includes("sender"),
     };
-
     if (dateRange === "last_n_days")
       config.last_n_days = Number(values.days) || 30;
     if (dateRange === "custom") {
       config.date_from = values.dateFrom ? values.dateFrom.toISOString() : null;
       config.date_to = values.dateTo ? values.dateTo.toISOString() : null;
     }
-
     const min = parseSize(values.minSize);
     const max = parseSize(values.maxSize);
     if (min != null || max != null)
@@ -105,12 +175,20 @@ function NewDownloadForm() {
       .filter(Boolean);
     if (senders.length) config.sender_filter = senders;
     if (values.output[0]) config.output_path = values.output[0];
+    return config;
+  }
+
+  async function start(values: FormValues, dryRun: boolean) {
+    const config = buildConfig(values);
+    if (!config) return;
 
     const toast = await showToast({
       style: Toast.Style.Animated,
       title: "Starting download…",
     });
     try {
+      if (values.profileName.trim())
+        await profileSave(values.profileName.trim(), config);
       const { job_id } = await startJob(config, { dryRun });
       toast.style = Toast.Style.Success;
       toast.title = dryRun ? "Dry run started" : "Download started";
@@ -127,6 +205,31 @@ function NewDownloadForm() {
     }
   }
 
+  async function saveProfileOnly(values: FormValues) {
+    const config = buildConfig(values);
+    if (!config) return;
+    if (!values.profileName.trim()) {
+      await showToast({
+        style: Toast.Style.Failure,
+        title: "Enter a profile name first",
+      });
+      return;
+    }
+    try {
+      await profileSave(values.profileName.trim(), config);
+      await showToast({
+        style: Toast.Style.Success,
+        title: `Saved profile “${values.profileName.trim()}”`,
+      });
+    } catch (e) {
+      await showToast({
+        style: Toast.Style.Failure,
+        title: "Couldn't save profile",
+        message: e instanceof TgdlError ? e.message : String(e),
+      });
+    }
+  }
+
   return (
     <Form
       actions={
@@ -134,17 +237,40 @@ function NewDownloadForm() {
           <Action.SubmitForm
             title="Start Download"
             icon={Icon.Download}
-            onSubmit={(v: FormValues) => submit(v, false)}
+            onSubmit={(v: FormValues) => start(v, false)}
           />
           <Action.SubmitForm
             title="Dry Run (Preview)"
             icon={Icon.Eye}
-            onSubmit={(v: FormValues) => submit(v, true)}
+            onSubmit={(v: FormValues) => start(v, true)}
+          />
+          <Action.SubmitForm
+            title="Save as Profile"
+            icon={Icon.SaveDocument}
+            shortcut={{ modifiers: ["cmd"], key: "s" }}
+            onSubmit={saveProfileOnly}
           />
         </ActionPanel>
       }
     >
       <Form.Description text="Configure a background download. It keeps running after you close Raycast — track it from the Download Monitor menu bar." />
+
+      {profiles.length > 0 && (
+        <Form.Dropdown
+          id="loadProfile"
+          title="Load Profile"
+          info="Pre-fill this form from a saved profile, then tweak and run."
+          value=""
+          onChange={(v) => {
+            if (v) onLoadProfile(v);
+          }}
+        >
+          <Form.Dropdown.Item value="" title="— none —" />
+          {profiles.map((name) => (
+            <Form.Dropdown.Item key={name} value={name} title={name} />
+          ))}
+        </Form.Dropdown>
+      )}
 
       {dialogs && dialogs.length > 0 && (
         <Form.Dropdown
@@ -179,7 +305,7 @@ function NewDownloadForm() {
       <Form.TagPicker
         id="mediaTypes"
         title="Media Types"
-        defaultValue={ALL_MEDIA_TYPES}
+        defaultValue={initial?.media_types ?? ALL_MEDIA_TYPES}
       >
         {MEDIA_TYPE_OPTIONS.map((m) => (
           <Form.TagPicker.Item key={m.value} value={m.value} title={m.label} />
@@ -203,7 +329,7 @@ function NewDownloadForm() {
         <Form.TextField
           id="days"
           title="Days back"
-          defaultValue="30"
+          defaultValue={String(initial?.last_n_days ?? 30)}
           placeholder="30"
         />
       )}
@@ -227,27 +353,39 @@ function NewDownloadForm() {
       <Form.TextField
         id="minSize"
         title="Min Size"
+        defaultValue={
+          initial?.file_size?.min_bytes
+            ? formatBytes(initial.file_size.min_bytes)
+            : ""
+        }
         placeholder="e.g. 100KB (optional)"
       />
       <Form.TextField
         id="maxSize"
         title="Max Size"
+        defaultValue={
+          initial?.file_size?.max_bytes
+            ? formatBytes(initial.file_size.max_bytes)
+            : ""
+        }
         placeholder="e.g. 500MB (optional)"
       />
       <Form.TextField
         id="caption"
         title="Caption Filter"
+        defaultValue={initial?.caption_keyword ?? ""}
         placeholder="text or /regex/ (optional)"
       />
       <Form.TextField
         id="senders"
         title="Senders"
+        defaultValue={(initial?.sender_filter ?? []).join(", ")}
         placeholder="@user1, @user2 (optional, comma-separated)"
       />
       <Form.Checkbox
         id="dedup"
         label="Skip duplicate files (same content)"
-        defaultValue={true}
+        defaultValue={initial?.deduplicate ?? true}
       />
 
       <Form.Separator />
@@ -258,9 +396,7 @@ function NewDownloadForm() {
         allowMultipleSelection={false}
         canChooseDirectories
         canChooseFiles={false}
-        defaultValue={
-          prefs.defaultDownloadFolder ? [prefs.defaultDownloadFolder] : []
-        }
+        defaultValue={outputDefault}
       />
       <Form.Dropdown
         id="template"
@@ -272,7 +408,11 @@ function NewDownloadForm() {
           <Form.Dropdown.Item key={t.value} value={t.value} title={t.title} />
         ))}
       </Form.Dropdown>
-      <Form.TagPicker id="subfolders" title="Subfolders By" defaultValue={[]}>
+      <Form.TagPicker
+        id="subfolders"
+        title="Subfolders By"
+        defaultValue={subDefaults}
+      >
         <Form.TagPicker.Item value="type" title="Media type" />
         <Form.TagPicker.Item value="date" title="Year-month" />
         <Form.TagPicker.Item value="sender" title="Sender" />
@@ -280,12 +420,16 @@ function NewDownloadForm() {
       <Form.Checkbox
         id="sidecars"
         label="Save .json metadata sidecars"
-        defaultValue={false}
+        defaultValue={initial?.json_sidecars ?? false}
       />
 
       <Form.Separator />
 
-      <Form.Dropdown id="resume" title="Resume Mode" defaultValue="smart">
+      <Form.Dropdown
+        id="resume"
+        title="Resume Mode"
+        defaultValue={initial?.resume_mode ?? "smart"}
+      >
         {RESUME_OPTIONS.map((r) => (
           <Form.Dropdown.Item key={r.value} value={r.value} title={r.label} />
         ))}
@@ -293,12 +437,24 @@ function NewDownloadForm() {
       <Form.Dropdown
         id="concurrency"
         title="Concurrency"
-        defaultValue={prefs.defaultConcurrency ?? "3"}
+        defaultValue={String(
+          initial?.concurrency ?? prefs.defaultConcurrency ?? "3",
+        )}
       >
         {CONCURRENCY_OPTIONS.map((c) => (
           <Form.Dropdown.Item key={c} value={c} title={c} />
         ))}
       </Form.Dropdown>
+
+      <Form.Separator />
+
+      <Form.TextField
+        id="profileName"
+        title="Save as Profile"
+        defaultValue=""
+        placeholder="optional — name to save these settings (⌘S)"
+        info="Give a name to save these settings as a reusable profile. Leave blank to just download."
+      />
     </Form>
   );
 }

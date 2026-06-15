@@ -146,6 +146,24 @@ export function listProfiles(): Promise<ProfileSummary[]> {
   return runJson<ProfileSummary[]>(["profile", "list"]);
 }
 
+/** Full config stored in a profile (for pre-filling the form). */
+export function profileShow(name: string): Promise<DownloadConfig> {
+  return runJson<DownloadConfig>(["profile", "show", name]);
+}
+
+/** Save a config as a named profile (headless). */
+export async function profileSave(
+  name: string,
+  config: DownloadConfig,
+): Promise<void> {
+  const dir = mkdtempSync(join(tmpdir(), "tgdl-"));
+  const file = join(dir, "config.json");
+  writeFileSync(file, JSON.stringify(config), "utf-8");
+  const out = await run(["profile", "save", "--name", name, "--config", file]);
+  const parsed = parseMaybe<{ ok?: boolean; error?: string }>(out);
+  if (parsed?.error) throw new TgdlError(parsed.error);
+}
+
 /** Start a detached download from a full config (written to a temp file). */
 export async function startJob(
   config: DownloadConfig,
